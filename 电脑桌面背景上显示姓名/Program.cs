@@ -9,6 +9,7 @@ namespace 电脑桌面背景上显示姓名
     using System.Windows.Forms;
     using ExcelDataReader;
     using System.Text.RegularExpressions;
+    using System.Data;
 
     public class Program
     {
@@ -43,7 +44,7 @@ namespace 电脑桌面背景上显示姓名
                 ShowInTaskbar = false
             };
             // 创建一个标签来显示姓名或编号
-               label = new System.Windows.Forms.Label
+            label = new System.Windows.Forms.Label
             {
                 Text = GetTextToShow(), // 设置姓名或编号
                 //Text = Application.ProductName,
@@ -56,13 +57,26 @@ namespace 电脑桌面背景上显示姓名
             // 将标签添加到窗体中
             form.Controls.Add(label);
 
+            // 设置窗体大小和位置
+            form.Size = new Size(label.Width + 20, label.Height + 20);
+            // 获取屏幕的工作区大小
+            Rectangle workingArea = Screen.GetWorkingArea(form);
+
+            // 设置窗体的位置为右上角
+            form.Location = new Point(workingArea.Right - 2*form.Width, workingArea.Top+form.Height);
+
+            // 设置窗体为分层窗口
+            SetWindowLong(form.Handle, GWL_EXSTYLE, GetWindowLong(form.Handle, GWL_EXSTYLE) | WS_EX_LAYERED);
+
+            // 设置窗体透明度
+            SetLayeredWindowAttributes(form.Handle, 0, 128, LWA_COLORKEY);
+
             //创建一个Timer对象
             var timer = new System.Timers.Timer
             {
                 // 设置计时器的间隔为10分钟（以毫秒为单位）
                 Interval = 10 * 60 * 1000
             };
-
 
             // 设置计时器的Elapsed事件处理程序
             //timer.Elapsed += (sender, e) => TimerElapsed(sender, e, label);
@@ -71,37 +85,122 @@ namespace 电脑桌面背景上显示姓名
             // 启动计时器
             timer.Start();
 
-
-            // 设置窗体大小和位置
-            form.Size = new Size(label.Width + 20, label.Height + 20);
-            // 获取屏幕的工作区大小
-            Rectangle workingArea = Screen.GetWorkingArea(form);
-
-            // 设置窗体的位置为右上角
-            form.Location = new Point(workingArea.Right - 2*form.Width, workingArea.Top+form.Height);
-            // 设置窗体为分层窗口
-            SetWindowLong(form.Handle, GWL_EXSTYLE, GetWindowLong(form.Handle, GWL_EXSTYLE) | WS_EX_LAYERED);
-
-            // 设置窗体透明度
-            SetLayeredWindowAttributes(form.Handle, 0, 128, LWA_COLORKEY);
-
             // 运行窗体
             Application.Run(form);
 
         }
 
-        public static string GetTextToShow(string filePath = "课程表.xlsx", string sheetName = "Sheet1", string cellAddress = "1")
+        private static string GetTextToShow(string filePath = "课程表.xlsx")
         {
-            int columnIndex=-1, rowIndex=-1;
-            string className=string.Empty;
-            string studentName=string.Empty;
+            using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read))
+            {
+                using (var reader = ExcelReaderFactory.CreateReader(stream))
+                {
+                    var dataSet = reader.AsDataSet();
+                    var dataTable= GetClassTable(dataSet);
+                    if (dataTable != null)
+                        return GetComputerNOAndStudentName(dataTable);
+                    else return GetLocalIPAddress();
+                }
+            }
+        }
+
+        private static DataTable GetClassTable(DataSet dataSet)
+        {
+            try
+            {
+                var dataTable = dataSet.Tables["课程表"];
+                int columnIndex = -1, rowIndex = -1;
+                string className = string.Empty;
+                var chineseDayOfWeek = GetDayOfWeek().chineseDayOfWeek;
+                var chineseDayOfWeek2 = GetDayOfWeek().chineseDayOfWeek2;
+
+
+                for (int i = 0; i < dataTable.Rows.Count; i++)
+                {
+                    // 遍历查找包含特定时间数据的列
+                    for (int column = 0; column < dataTable.Columns.Count; column++)
+                    {
+                        var cellData = dataTable.Rows[i][column].ToString();
+
+                        if (cellData != string.Empty && cellData.Contains("-") && IsTimeInRange(cellData))
+                            rowIndex = i;
+                        // 判断单元格的值是否与当前时间的周几匹配
+                        if (cellData.Equals(chineseDayOfWeek, StringComparison.OrdinalIgnoreCase) || cellData.Equals(chineseDayOfWeek2, StringComparison.OrdinalIgnoreCase))
+                            columnIndex = column;
+                        if (rowIndex > -1 && columnIndex > -1)
+                        {
+                            className = dataTable.Rows[rowIndex][columnIndex].ToString();
+                            break;
+                        }
+                    }
+                    if (rowIndex > -1 && columnIndex > -1) break;
+                }
+                if (className == string.Empty) return null;
+                else return dataSet.Tables[className];
+            }
+            catch (KeyNotFoundException)
+            {
+                // 处理表名不存在的情况
+                // 可以输出错误信息或执行其他逻辑
+                Console.WriteLine("表名不存在");
+                return null;
+            }
+        }
+
+        private static string GetComputerNOAndStudentName(DataTable dataTable)
+        {
+            var localIP = GetLocalIPAddress();
             int NO = 0;
+            string studentName = string.Empty;
+            try
+            {
+                var rowIndex = -1;
+                // 读取学生姓名和IP地址
+                for (int i = 0; i < dataTable.Rows.Count; i++)
+                {
+                    // 遍历查找包含本机IP地址数据的列
+                    for (int column = 0; column < dataTable.Columns.Count; column++)
+                    {
+                        var cellData = dataTable.Rows[i][column].ToString();
+
+                        if (cellData != string.Empty && cellData.Contains(localIP))
+                        {
+                            rowIndex = i;
+                            break;
+                        }
+                        if (rowIndex > -1) break;
+                    }
+                }
+                // 遍历查找本机IP地址所在行的单元格，获取学生姓名
+                for (int column = 0; column < dataTable.Columns.Count; column++)
+                {
+                    if (NO > 0 && studentName.Length > 0) break;
+
+                    var cellData = dataTable.Rows[rowIndex][column].ToString();
+
+                    if (NO == 0 && Regex.IsMatch(cellData, @"^-?\d+$"))
+                        NO = int.Parse(cellData);
+                    if (studentName.Length == 0 && Regex.IsMatch(cellData, @"^[\u4e00-\u9fa5]{2,4}$"))
+                        studentName = cellData;
+                }
+                if (NO == -1 && studentName.Length == 0) return localIP;
+                else return $"{NO} {studentName}";
+            }
+            catch
+            {
+                Console.WriteLine();
+                return localIP;
+            }
+        }
+
+        private static (string chineseDayOfWeek, string chineseDayOfWeek2) GetDayOfWeek()
+        {
             // 获取当前时间的周几
             DayOfWeek currentDayOfWeek = DateTime.Now.DayOfWeek;
             // 将英文周几转换为中文周几
-            string chineseDayOfWeek = string.Empty;
-            string chineseDayOfWeek2 = string.Empty;
-
+            var chineseDayOfWeek = string.Empty;
+            var chineseDayOfWeek2 = string.Empty;
             switch (currentDayOfWeek)
             {
                 case DayOfWeek.Sunday:
@@ -133,102 +232,9 @@ namespace 电脑桌面背景上显示姓名
                     chineseDayOfWeek2 = "周六";
                     break;
             }
-            using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read))
-            {
-                using (var reader = ExcelReaderFactory.CreateReader(stream))
-                {
-                    var dataSet = reader.AsDataSet();
-                    try
-                    {
-                        var dataTable = dataSet.Tables["课程表"];
-
-                        for (int i = 0; i < dataTable.Rows.Count; i++)
-                        {
-                            // 遍历查找包含特定时间数据的列
-                            for (int column = 0; column < dataTable.Columns.Count; column++)
-                            {
-                                var cellData = dataTable.Rows[i][column].ToString();
-
-                                if (cellData != string.Empty && cellData.Contains("-"))
-                                {
-                                    if (IsTimeInRange(cellData))
-                                    {
-                                    rowIndex = i;
-                                    }
-                                }
-                                // 判断单元格的值是否与当前时间的周几匹配
-                                if (cellData.Equals(chineseDayOfWeek, StringComparison.OrdinalIgnoreCase) || cellData.Equals(chineseDayOfWeek2, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    columnIndex = column;
-                                }
-                                if (rowIndex > -1 && columnIndex > -1)
-                                {
-                                    className=dataTable.Rows[rowIndex][columnIndex].ToString();
-                                    break;
-                                }
-                            }
-                            if (rowIndex > -1 && columnIndex > -1)
-                            {
-                                break;
-                            }
-                        }
-                        try
-                        {
-                            if(className == string.Empty) return string.Empty;
-                            dataTable = dataSet.Tables[className];
-                            rowIndex =-1;
-                            // 读取学生姓名和IP地址
-                            var localIP = GetLocalIPAddress();
-                            for (int i = 0; i < dataTable.Rows.Count; i++)
-                            {
-                                // 遍历查找包含本机IP地址数据的列
-                                for (int column = 0; column < dataTable.Columns.Count; column++)
-                                {
-                                    var cellData = dataTable.Rows[i][column].ToString();
-
-                                    if (cellData != string.Empty && cellData.Contains(localIP))
-                                    {
-                                        rowIndex = i;
-                                        break;
-                                    }
-                                    if (rowIndex > -1) break;
-                                }
-                            }
-
-                            // 遍历查找本机IP地址所在行的单元格，获取学生姓名
-                            for (int column = 0; column < dataTable.Columns.Count; column++)
-                            {
-                                var cellData = dataTable.Rows[rowIndex][column].ToString();
-
-                                if (Regex.IsMatch(cellData, @"^-?\d+$"))
-                                {
-                                    NO = int.Parse(cellData);
-                                    continue;
-                                }
-                                if(Regex.IsMatch(cellData, @"^[\u4e00-\u9fa5]{2,4}$"))
-                                {
-                                    studentName = cellData;
-                                }
-                                if (NO>0 && studentName.Length>0) return NO.ToString() + " " + studentName;
-                            }
-                            return NO.ToString() + " " + studentName;
-                        }
-                        catch 
-                        {
-                            Console.WriteLine("表名不存在");
-                            return string.Empty;
-                        }
-                    }
-                    catch (KeyNotFoundException)
-                    {
-                        // 处理表名不存在的情况
-                        // 可以输出错误信息或执行其他逻辑
-                        Console.WriteLine("表名不存在");
-                        return string.Empty;
-                    }
-                }
-            }
+            return (chineseDayOfWeek, chineseDayOfWeek2);
         }
+
         private static void Timer_Tick(object sender, EventArgs e)
         {
             // 在标签上显示当前时间
@@ -256,8 +262,6 @@ namespace 电脑桌面背景上显示姓名
                 return currentTime >= startTime || currentTime <= endTime;
             }
         }
-
-
 
         static string GetLocalIPAddress()
         {
